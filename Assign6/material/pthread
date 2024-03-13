@@ -1,0 +1,5 @@
+types: pthread[_object]_t
+function: pthread[_object]_action
+Macros: PTHREAD_PURPOSE
+
+

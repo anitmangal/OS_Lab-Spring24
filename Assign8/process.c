@@ -39,15 +39,23 @@ int main(int argc, char * argv[]) {
 
     char * ref = strtok(refstr, " ");
     while (ref != NULL) {
-        msg3.msg_type = p_ind+1;
+        msg3.msg_type = 2*p_ind+1;
         msg3.msg.pg_num = atoi(ref);
         msgsnd(mq3, &msg3, sizeof(msg3.msg), 0);
 
         if (atoi(ref) == -9) break;
 
-        msgrcv(mq3, &msg3, sizeof(msg3.msg), p_ind+1, 0);
-
-
-        ref = strtok(NULL, " ");
+        msgrcv(mq3, &msg3, sizeof(msg3.msg), 2*p_ind+2, 0);
+        if (msg3.msg.pg_num == -1) {
+            // Page fault
+            kill(getpid(), SIGSTOP);
+        }
+        else if (msg3.msg.pg_num == -2) {
+            exit(0);
+        }
+        else {
+            // Got valid page, go to next.
+            ref = strtok(NULL, " ");
+        }
     }
 }

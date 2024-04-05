@@ -1,1 +1,1 @@
-// For MQ3, remember that process index is actual index + 1. This is because we only give positive numbers in msg_type for msgqueues.
+// For MQ3, remember that process sends pg request with type (index*2+1). mmu sends it a reply with type (index*2 + 2)

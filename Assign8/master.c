@@ -45,19 +45,6 @@ int main() {
     sprintf(k_str, "%d", k);
     sprintf(m_str, "%d", m);
 
-    // Initialize Data Structures
-    struct page_table * page_table = (struct page_table *) shmat(shm1, NULL, 0);
-    for (int i = 0; i < k*m; i++) {
-        page_table[i].frame_number = -1;
-        page_table[i].valid_bit = false;
-    }
-    int * free_frame_list = (int *) shmat(shm2, NULL, 0);
-    free_frame_list[0] = f;
-    for (int i = 1; i <= f; i++) {
-        free_frame_list[i] = i-1;
-    }
-    int * page_number_mapping = (int *) shmat(shm3, NULL, 0);
-
 
     // Create scheduler
     int scheduler_pid = fork();
@@ -72,20 +59,36 @@ int main() {
         execvp(args[0], args);
     }
 
+    // Initialize Data Structures
+    struct page_table * page_table = (struct page_table *) shmat(shm1, NULL, 0);
+    for (int i = 0; i < k*m; i++) {
+        page_table[i].frame_number = -1;
+        page_table[i].valid_bit = false;
+    }
+    int * free_frame_list = (int *) shmat(shm2, NULL, 0);
+    free_frame_list[0] = f;
+    for (int i = 1; i <= f; i++) {
+        free_frame_list[i] = i-1;
+    }
+    int * page_number_mapping = (int *) shmat(shm3, NULL, 0);
+
+
     // Create processes
     for (int i = 0; i < k; i++) {
         page_number_mapping[i] = 1 + rand()%m;
         int x = 2*page_number_mapping[i] + rand()%(8*page_number_mapping[i] + 1);       // Length of reference string
-        int ref_string[x];
+        int ref_string[x+1];
         int num_digits = 0;
         for (int j = 0; j < x; j++) {
             if ((float)rand() / (float)RAND_MAX < p) ref_string[j] = page_number_mapping[i] + rand()%(f-page_number_mapping[i]);        // Illegal page reference
             else ref_string[j] = rand()%page_number_mapping[i];        // Legal page reference
             num_digits += snprintf(NULL, 0, "%d", ref_string[j]);
         }
-        char ref_string_str[num_digits+x+1];
+        ref_string[x] = -9;
+        num_digits += snprintf(NULL, 0, "%d", ref_string[x]);
+        char ref_string_str[num_digits+x+1];        // Print numbers with spaces
         ref_string_str[0] = '\0';
-        for (int j = 0; j < x; j++) {
+        for (int j = 0; j <= x; j++) {
             char temp[10];
             sprintf(temp, "%d", ref_string[j]);
             strcat(ref_string_str, temp);
@@ -94,14 +97,16 @@ int main() {
 
         int process_pid = fork();
         if (process_pid == 0) {
-            char *args[] = {"./process", mq1_str, mq3_str, ref_string_str, NULL};
+            char i_str[10];
+            sprintf(i_str, "%d", i);
+            char *args[] = {"./process", mq1_str, mq3_str, ref_string_str, i_str, NULL};
             execvp(args[0], args);
         }
 
         usleep(250000);        // Sleep for 250 ms
     }
 
-    msgrcv(mq1, NULL, 0, k, MSG_NOERROR);        // Wait for all processes to finish. Message type = k
+    msgrcv(mq1, NULL, 0, 2, MSG_NOERROR);        // Wait for all processes to finish. Message type = 2
 
     // Terminating scheduler and mmu
     kill(scheduler_pid, SIGKILL);

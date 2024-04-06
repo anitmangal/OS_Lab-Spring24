@@ -14,7 +14,7 @@ struct msg1_buffer {
 struct msg2_buffer {
     long msg_type;
     struct msg {
-        int pid;
+        int type_of_msg;
     } msg;
 };
 
@@ -30,16 +30,16 @@ int main(int argc, char *argv[]) {
             msg1.msg_type = 2;
             msgsnd(mq1, &msg1, sizeof(msg1.msg), 0);
         }
-        msgrcv(mq1, &msg1, sizeof(msg1.msg), 1, 0);     // Type 1 message from ready queue
+        msgrcv(mq1, &msg1, sizeof(msg1.msg), 0, 0);    // Current process in the ready queue
 
-        int pid = msg1.msg.pid;
+        int pid = msg1.msg.pid;                         // pid of the current process
         kill(pid, SIGCONT);
 
-        msgrcv(mq2, &msg2, sizeof(msg2.msg), 0, 0);     // Any message
-        if (msg2.msg_type == 1) {
+        msgrcv(mq2, &msg2, sizeof(msg2.msg), 0, 0);     // Status of the current process
+        if (msg2.msg.type_of_msg == 1) {
             // PAGE FAULT HANDLED
             msg1.msg_type = 1;
-            msg1.msg.pid = msg2.msg.pid;
+            msg1.msg.pid = pid;
             msgsnd(mq1, &msg1, sizeof(msg1.msg), 0);
         }
         else {
@@ -47,4 +47,5 @@ int main(int argc, char *argv[]) {
             k--;
         }
     }
+    return 0;
 }

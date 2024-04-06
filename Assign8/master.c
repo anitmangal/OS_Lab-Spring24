@@ -72,10 +72,23 @@ int main() {
     }
     int * page_number_mapping = (int *) shmat(shm3, NULL, 0);
 
+    // Pages per process and frame allocation
+    int total_pages = 0;
+    for (int i = 0; i < k; i++) {
+        page_number_mapping[i] = rand()%m + 1;
+        total_pages += page_number_mapping[i];
+    }
+    for (int i = 0; i < k; i++) {
+        int num_frames = (int)((float)page_number_mapping[i]/total_pages*f);
+        for (int j = 0; j < num_frames; j++) {
+            page_table[i*m+j].frame_number = free_frame_list[free_frame_list[0]];
+            free_frame_list[0]--;
+            page_table[i*m+j].valid_bit = true;
+        }
+    }
 
     // Create processes
     for (int i = 0; i < k; i++) {
-        page_number_mapping[i] = 1 + rand()%m;
         int x = 2*page_number_mapping[i] + rand()%(8*page_number_mapping[i] + 1);       // Length of reference string
         int ref_string[x+1];
         int num_digits = 0;

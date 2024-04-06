@@ -11,14 +11,15 @@ struct msg1_buffer {
     struct msg {
         int pid;
     } msg;
-};
+};                                          // To push into the ready queue
 
 struct msg3_buffer {
     long msg_type;
     struct msg{
         int pg_num;
+        int index;
     }msg;
-};
+};                                          // To request for a page from mq3
 
 int main(int argc, char * argv[]) {
     int mq1 = atoi(argv[1]);
@@ -38,24 +39,31 @@ int main(int argc, char * argv[]) {
     struct msg3_buffer msg3;
 
     char * ref = strtok(refstr, " ");
+    int page_fault_occurred = 0; // Flag to restart if page fault occurs
     while (ref != NULL) {
-        msg3.msg_type = 2*p_ind+1;
-        msg3.msg.pg_num = atoi(ref);
-        msgsnd(mq3, &msg3, sizeof(msg3.msg), 0);
-
         if (atoi(ref) == -9) break;
 
-        msgrcv(mq3, &msg3, sizeof(msg3.msg), 2*p_ind+2, 0);
+        msg3.msg_type = 1;          // Request for a page
+        msg3.msg.pg_num = atoi(ref);
+        msg3.msg.index = p_ind;     // Index of the process (0 based)
+        msgsnd(mq3, &msg3, sizeof(msg3.msg), 0);
+
+        msgrcv(mq3, &msg3, sizeof(msg3.msg), 2, 0);     // Get the frame from mmu
         if (msg3.msg.pg_num == -1) {
             // Page fault
+            page_fault_occurred = 1;     // Setting the flag to 1 if a page fault occurs
             kill(getpid(), SIGSTOP);
+            page_fault_occurred = 0;     // Reset the flag immediately after stopping the process
         }
         else if (msg3.msg.pg_num == -2) {
             exit(0);
         }
         else {
             // Got valid page, go to next.
-            ref = strtok(NULL, " ");
+            if (!page_fault_occurred) {     // Only advance to the next token if no page fault occurred
+                ref = strtok(NULL, " ");
+            }
         }
     }
+    return 0;
 }

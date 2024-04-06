@@ -1,5 +1,3 @@
-// For MQ3, remember that process sends pg request with type (index*2+1). mmu sends it a reply with type (index*2 + 2)
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/ipc.h>
@@ -7,65 +5,140 @@
 #include <sys/msg.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <stdbool.h>
 
-// Define message structure for communication
-struct message {
-    long mtype; // Process ID for Type I messages, special values (-9, -2) for Type II
-    int page_number;
+struct page_table {
+    int frame_number;
+    bool valid_bit;
+};
+
+
+// For mq3
+struct msg3_buffer {
+    long msg_type;
+    struct msg{
+        int pg_num;
+        int index;
+    }msg;
+}; 
+
+// For mq2
+struct msg2_buffer {
+    long msg_type;
+    struct msg {
+        int type_of_msg;
+    } msg;
 };
 
 // Prototype for the PageFaultHandler
-void PageFaultHandler(int page_number, int process_id, int* page_table, int* free_frame_list);
+void PageFaultHandler(struct page_table * page_table, int * free_frame_list, int page_number, int process_idx, int m, int global_timestamp, int * last_used){
+    int page_table_idx = process_idx * m + page_number;
+    if(free_frame_list[0] > 0){
+        // Use the last available frame to insert in to the page table
+        page_table[page_table_idx].frame_number = free_frame_list[free_frame_list[0]--];
+        page_table[page_table_idx].valid_bit = true;
+        last_used[page_table_idx] = global_timestamp;
+    }
+    else{
+        // Use local replacement using LRU
+        int victim_page_idx = process_idx * m;
+        int min_timestamp = global_timestamp;
+        for(int i = 0; i<m; ++i){
+            if(last_used[process_idx*m + i] < min_timestamp && page_table[process_idx*m + i].valid_bit == true){
+                min_timestamp = last_used[process_idx*m + i];
+                victim_page_idx = process_idx*m + i;
+            }
+        }
+        page_table[victim_page_idx].valid_bit = false;
+        last_used[victim_page_idx] = -1;
+        page_table[page_table_idx].frame_number = page_table[victim_page_idx].frame_number;
+        page_table[page_table_idx].valid_bit = true;
+        last_used[page_table_idx] = global_timestamp;
+    }
+
+}
 
 int main(int argc, char *argv[]) {
-    if (argc != 5) {
-        printf("Usage: ./mmu <page_table_shm_id> <free_frame_list_shm_id> <mq2_id> <mq3_id>\n");
+    if (argc != 8) {
+        printf("Wrong number of arguments\n");
         exit(1);
     }
 
     // Convert command line arguments
-    int shm_page_table_id = atoi(argv[1]);
-    int shm_free_frame_list_id = atoi(argv[2]);
-    int mq2 = atoi(argv[3]);
-    int mq3 = atoi(argv[4]);
+    int mq2 = atoi(argv[1]);
+    int mq3 = atoi(argv[2]);
+    int shm1 = atoi(argv[3]);
+    int shm2 = atoi(argv[4]);
+    int shm3 = atoi(argv[5]);
+    int m = atoi(argv[6]);
+    int k = atoi(argv[7]);
 
     // Attach to shared memory
-    int *page_table = (int*)shmat(shm_page_table_id, NULL, 0);
-    int *free_frame_list = (int*)shmat(shm_free_frame_list_id, NULL, 0);
+    struct page_table * page_table = (struct page_table *) shmat(shm1, NULL, 0);
+    int * free_frame_list = (int *) shmat(shm2, NULL, 0);
+    int * page_number_mapping = (int *) shmat(shm3, NULL, 0);
 
     // Global timestamp
     int global_timestamp = 0;
 
-    struct message msg;
-    while(1) {
+    int * last_used = (int *) malloc(k*m * sizeof(int));            // For LRU
+    for(int i = 0; i<k*m; i++) last_used[i] = -1;                   // Initialize with -1 (Never used)
+
+    while(k>0) {
         // Wait for a page number from any process
-        if (msgrcv(mq3, &msg, sizeof(msg) - sizeof(long), 0, 0) < 0) {
-            perror("msgrcv");
-            break;
-        }
+        struct msg3_buffer demand;
+        struct msg3_buffer supply;
+
+        supply.msg_type = 2;
+
+        struct msg2_buffer msg2;
+        msg2.msg_type = 1;
+
+        msgrcv(mq3, &demand, sizeof(demand.msg), 1, 0); // Get the page number from the process
 
         global_timestamp++; // Increment global timestamp
 
-        int page_number = msg.page_number;
-        int process_id = msg.mtype; // Using mtype to store process ID
+        int page_number = demand.msg.pg_num;
+        int process_idx = demand.msg.index;
+        int m_process = page_number_mapping[process_idx]; // Number of pages for the process
 
         if (page_number == -9) {
-            // Process completed execution
-            // Update free frame list and release frames (not shown for brevity)
+            // Process has finished
+            k--;
+            
+            // Free the allocated frames back to free frames list
+            int page_idx_base = process_idx * m;
+            for(int i = 0; i<m_process; ++i){
+                if(page_table[page_idx_base + i].frame_number != -1 && page_table[page_idx_base + i].valid_bit == true){
+                    free_frame_list[++free_frame_list[0]] = page_table[page_idx_base + i].frame_number;
+                    page_table[page_idx_base + i].frame_number = -1;
+                    page_table[page_idx_base + i].valid_bit = false;
+                }
+            }
+
             // Send Type II message to Scheduler
-        } else if (page_number == -2) {
-            printf("TRYING TO ACCESS INVALID PAGE REFERENCE\n");
-            // Send Type II message to Scheduler
+            msg2.msg.type_of_msg = 2;
+            msgsnd(mq2, &msg2, sizeof(msg2.msg), 0);
         } else {
-            // Check page table for the page
-            // Assume page_table is an array where index represents the page number
-            // and the value at each index is the frame number or -1 if not present
-            if (page_table[page_number] != -1) {
-                // Page found in table, send frame number back to process
+            if(page_number >= m_process) {
+                // Invalid page number
+                printf("TRYING TO ACCESS INVALID PAGE REFERENCE\n");
+                supply.msg.pg_num = -2;
             } else {
-                // Page fault, call PageFaultHandler
-                PageFaultHandler(page_number, process_id, page_table, free_frame_list);
-                // Send Type I message to Scheduler
+                int page_table_idx = process_idx * m + page_number;
+                if(page_table[page_table_idx].valid_bit == false) {
+                    // Page is not valid
+                    PageFaultHandler(page_table, free_frame_list, page_number, process_idx, m, global_timestamp, last_used);
+                    supply.msg.pg_num = -1;
+                    msg2.msg.type_of_msg = 1;
+                    msgsnd(mq3, &supply, sizeof(supply.msg), 0);
+                    msgsnd(mq2, &msg2, sizeof(msg2.msg), 0);
+                } else {
+                    // Page is in memory
+                    last_used[page_table_idx] = global_timestamp; // Update the timestamp
+                    supply.msg.pg_num = page_table[page_table_idx].frame_number;
+                    msgsnd(mq3, &supply, sizeof(supply.msg), 0);
+                }
             }
         }
     }
@@ -77,9 +150,3 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-void PageFaultHandler(int page_number, int process_id, int* page_table, int* free_frame_list) {
-    // Implement page fault handling
-    // 1. Check for a free frame
-    // 2. If no free frame, select a victim page using LRU and replace it
-    // Update page table and free frame list accordingly
-}

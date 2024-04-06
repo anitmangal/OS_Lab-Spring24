@@ -55,7 +55,7 @@ int main() {
     // Create mmu in xterm
     int mmu_pid = fork();
     if (mmu_pid == 0) {
-        char *args[] = {"xterm", "-T", "MMU", "-e", "./mmu", mq2_str, mq3_str, shm1_str, shm2_str, m_str, NULL};
+        char *args[] = {"xterm", "-T", "MMU", "-e", "./mmu", mq2_str, mq3_str, shm1_str, shm2_str, shm3_str , m_str, k_str, NULL};
         execvp(args[0], args);
     }
 
@@ -81,7 +81,7 @@ int main() {
     for (int i = 0; i < k; i++) {
         int num_frames = (int)((float)page_number_mapping[i]/total_pages*f);
         for (int j = 0; j < num_frames; j++) {
-            page_table[i*m+j].frame_number = free_frame_list[free_frame_list[0]];
+            page_table[i*m+j].frame_number = free_frame_list[free_frame_list[0]];         
             free_frame_list[0]--;
             page_table[i*m+j].valid_bit = true;
         }
@@ -121,6 +121,7 @@ int main() {
 
     msgrcv(mq1, NULL, 0, 2, MSG_NOERROR);        // Wait for all processes to finish. Message type = 2
 
+    usleep(1000);      // Giving time to mmu to cleanup
     // Terminating scheduler and mmu
     kill(scheduler_pid, SIGKILL);
     kill(mmu_pid, SIGKILL);

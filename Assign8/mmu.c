@@ -30,7 +30,7 @@ struct msg2_buffer {
     } msg;
 };
 
-// Prototype for the PageFaultHandler
+
 void PageFaultHandler(struct page_table * page_table, int * free_frame_list, int page_number, int process_idx, int m, int global_timestamp, int * last_used){
     int page_table_idx = process_idx * m + page_number;
     if(free_frame_list[0] > 0){
@@ -84,6 +84,13 @@ int main(int argc, char *argv[]) {
     int * last_used = (int *) malloc(k*m * sizeof(int));            // For LRU
     for(int i = 0; i<k*m; i++) last_used[i] = -1;                   // Initialize with -1 (Never used)
 
+    // Output file
+    FILE *output_file = fopen("result.txt", "w");
+
+    int *page_fault_count = calloc(k, sizeof(int)); // Array to keep track of page faults for each process
+    int *invalid_page_ref_count = calloc(k, sizeof(int)); // Array to keep track of invalid page references for each process
+    int t = k;              // Copy of k for later use
+
     while(k>0) {
         // Wait for a page number from any process
         struct msg3_buffer demand;
@@ -123,11 +130,21 @@ int main(int argc, char *argv[]) {
             if(page_number >= m_process) {
                 // Invalid page number
                 printf("TRYING TO ACCESS INVALID PAGE REFERENCE\n");
+                fflush(stdout);
+                printf("Invalid page reference - (p%d,x%d)\n", process_idx, page_number);
+                fflush(stdout);
+
+                fprintf(output_file, "Invalid page reference - (p%d,x%d)\n", process_idx, page_number);
+                invalid_page_ref_count[process_idx]++;
                 supply.msg.pg_num = -2;
             } else {
                 int page_table_idx = process_idx * m + page_number;
                 if(page_table[page_table_idx].valid_bit == false) {
                     // Page is not valid
+                    printf("Page fault - (p%d,x%d)\n", process_idx, page_number);
+                    fprintf(output_file, "Page fault - (p%d,x%d)\n", process_idx, page_number);
+                    page_fault_count[process_idx]++;
+
                     PageFaultHandler(page_table, free_frame_list, page_number, process_idx, m, global_timestamp, last_used);
                     supply.msg.pg_num = -1;
                     msg2.msg.type_of_msg = 1;
@@ -140,8 +157,22 @@ int main(int argc, char *argv[]) {
                     msgsnd(mq3, &supply, sizeof(supply.msg), 0);
                 }
             }
+            printf("Global ordering - (t%d,p%d,x%d)\n", global_timestamp, process_idx, page_number);
+            fprintf(output_file, "Global ordering - (t%d,p%d,x%d)\n", global_timestamp, process_idx, page_number);
         }
     }
+
+    // Print and write total counts
+    for(int i = 0; i < t; i++) {
+        printf("Total page faults for process p%d: %d\n", i, page_fault_count[i]);
+        printf("Total invalid page references for process p%d: %d\n", i, invalid_page_ref_count[i]);
+        fprintf(output_file, "Total page faults for process p%d: %d\n", i, page_fault_count[i]);
+        fprintf(output_file, "Total invalid page references for process p%d: %d\n", i, invalid_page_ref_count[i]);
+    }
+
+    fclose(output_file);
+    free(page_fault_count);
+    free(invalid_page_ref_count);
 
     // Cleanup before exit
     shmdt(page_table);

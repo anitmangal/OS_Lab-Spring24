@@ -16,7 +16,7 @@ struct page_table {
 // For mq3
 struct msg3_buffer {
     long msg_type;
-    struct msg{
+    struct msg3 {
         int pg_num;
         int index;
     }msg;
@@ -25,7 +25,7 @@ struct msg3_buffer {
 // For mq2
 struct msg2_buffer {
     long msg_type;
-    struct msg {
+    struct msg2 {
         int type_of_msg;
     } msg;
 };
@@ -125,6 +125,7 @@ int main(int argc, char *argv[]) {
 
             // Send Type II message to Scheduler
             msg2.msg.type_of_msg = 2;
+            printf("MMU: Process %d has finished\n", process_idx);
             msgsnd(mq2, &msg2, sizeof(msg2.msg), 0);
         } else {
             if(page_number >= m_process) {
@@ -136,7 +137,30 @@ int main(int argc, char *argv[]) {
 
                 fprintf(output_file, "Invalid page reference - (p%d,x%d)\n", process_idx, page_number);
                 invalid_page_ref_count[process_idx]++;
+
+                // Process has been terminated
+                k--;
+                
+                // Free the allocated frames back to free frames list
+                int page_idx_base = process_idx * m;
+                for(int i = 0; i<m_process; ++i){
+                    if(page_table[page_idx_base + i].frame_number != -1 && page_table[page_idx_base + i].valid_bit == true){
+                        free_frame_list[++free_frame_list[0]] = page_table[page_idx_base + i].frame_number;
+                        page_table[page_idx_base + i].frame_number = -1;
+                        page_table[page_idx_base + i].valid_bit = false;
+                    }
+                }
+
                 supply.msg.pg_num = -2;
+                supply.msg.index = process_idx;
+                supply.msg_type = 2;
+                msgsnd(mq3, &supply, sizeof(supply.msg), 0);
+
+
+                msg2.msg.type_of_msg = 2;
+                msg2.msg_type = 1;
+                printf("MMU: Invalid page reference\n");
+                msgsnd(mq2, &msg2, sizeof(msg2.msg), 0);
             } else {
                 int page_table_idx = process_idx * m + page_number;
                 if(page_table[page_table_idx].valid_bit == false) {
@@ -149,6 +173,7 @@ int main(int argc, char *argv[]) {
                     supply.msg.pg_num = -1;
                     msg2.msg.type_of_msg = 1;
                     msgsnd(mq3, &supply, sizeof(supply.msg), 0);
+                    printf("MMU: Page fault\n");
                     msgsnd(mq2, &msg2, sizeof(msg2.msg), 0);
                 } else {
                     // Page is in memory

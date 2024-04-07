@@ -8,6 +8,8 @@
 #include <string.h>
 #include <sys/types.h>
 #include <signal.h>
+#include <time.h>
+#include <sys/sem.h>
 
 #define p 0.05              // Probability of illegal page reference
 
@@ -20,12 +22,16 @@ int main() {
     srand(time(NULL));
 
     int k, m, f;
-    printf("Enter number of processes: ");
-    scanf("%d", &k);
-    printf("Enter virtual space size (Max number of pages per process): ");
-    scanf("%d", &m);
-    printf("Enter number of frames: ");
-    scanf("%d", &f);
+    do {
+        printf("Enter number of processes: ");
+        scanf("%d", &k);
+        printf("Enter virtual space size (Max number of pages per process): ");
+        scanf("%d", &m);
+        printf("Enter number of frames: ");
+        scanf("%d", &f);
+        if (k > f) printf("Number of processes should be less than or equal to number of frames for local page replacement.\n");
+    }
+    while (k > f);
 
     // Create Data Structures
     int shm1 = shmget(IPC_PRIVATE, k*m*(sizeof(struct page_table)), IPC_CREAT | 0666);      // Shared memory for page table. <frame_number, valid_bit>
@@ -45,19 +51,14 @@ int main() {
     sprintf(k_str, "%d", k);
     sprintf(m_str, "%d", m);
 
-
-    // Create scheduler
-    int scheduler_pid = fork();
-    if (scheduler_pid == 0) {
-        char *args[] = {"./scheduler", mq1_str, mq2_str, k_str, NULL};
-        execvp(args[0], args);
-    }
-    // Create mmu in xterm
-    int mmu_pid = fork();
-    if (mmu_pid == 0) {
-        char *args[] = {"xterm", "-T", "MMU", "-e", "./mmu", mq2_str, mq3_str, shm1_str, shm2_str, m_str, NULL};
-        execvp(args[0], args);
-    }
+    int sem = semget(IPC_PRIVATE, k, IPC_CREAT | 0666);        // Semaphore for each process
+    semctl(sem, 0, SETALL, 0);       // Initialize all semaphores to 0
+    char sem_str[10];
+    sprintf(sem_str, "%d", sem);
+    int notify_sem = semget(IPC_PRIVATE, 1, IPC_CREAT | 0666);        // Semaphore for notifying master
+    semctl(notify_sem, 0, SETVAL, 0);       // Initialize notify semaphore to 0
+    char notify_sem_str[10];
+    sprintf(notify_sem_str, "%d", notify_sem);
 
     // Initialize Data Structures
     struct page_table * page_table = (struct page_table *) shmat(shm1, NULL, 0);
@@ -78,13 +79,34 @@ int main() {
         page_number_mapping[i] = rand()%m + 1;
         total_pages += page_number_mapping[i];
     }
+
+    // Allocate frames to first page of each process
     for (int i = 0; i < k; i++) {
-        int num_frames = (int)((float)page_number_mapping[i]/total_pages*f);
+        page_table[i*m].frame_number = free_frame_list[free_frame_list[0]];
+        free_frame_list[0]--;
+        page_table[i*m].valid_bit = true;
+    }
+    // Allocate frames to other pages of each process proportionately
+    for (int i = 0; i < k; i++) {
+        int num_frames = (int)((float)(page_number_mapping[i]-1)/(total_pages-k)*(f-k));
         for (int j = 0; j < num_frames; j++) {
-            page_table[i*m+j].frame_number = free_frame_list[free_frame_list[0]];
+            page_table[i*m+j].frame_number = free_frame_list[free_frame_list[0]];         
             free_frame_list[0]--;
             page_table[i*m+j].valid_bit = true;
         }
+    }
+
+    // Create scheduler
+    int scheduler_pid = fork();
+    if (scheduler_pid == 0) {
+        char *args[] = {"./scheduler", mq1_str, mq2_str, k_str, sem_str, notify_sem_str, NULL};
+        execvp(args[0], args);
+    }
+    // Create mmu in xterm
+    int mmu_pid = fork();
+    if (mmu_pid == 0) {
+        char *args[] = {"xterm", "-hold", "-T", "MMU", "-e", "./mmu", mq2_str, mq3_str, shm1_str, shm2_str, shm3_str , m_str, k_str, NULL};
+        execvp(args[0], args);
     }
 
     // Create processes
@@ -93,7 +115,7 @@ int main() {
         int ref_string[x+1];
         int num_digits = 0;
         for (int j = 0; j < x; j++) {
-            if ((float)rand() / (float)RAND_MAX < p) ref_string[j] = page_number_mapping[i] + rand()%(f-page_number_mapping[i]);        // Illegal page reference
+            if ((float)rand() / (float)RAND_MAX < p) ref_string[j] = page_number_mapping[i] + rand()%(f-page_number_mapping[i]+1);        // Illegal page reference
             else ref_string[j] = rand()%page_number_mapping[i];        // Legal page reference
             num_digits += snprintf(NULL, 0, "%d", ref_string[j]);
         }
@@ -105,22 +127,29 @@ int main() {
             char temp[10];
             sprintf(temp, "%d", ref_string[j]);
             strcat(ref_string_str, temp);
-            strcat(ref_string_str, " ");
+            if (j < x) strcat(ref_string_str, " ");
         }
+        fflush(stdout);
 
         int process_pid = fork();
         if (process_pid == 0) {
             char i_str[10];
             sprintf(i_str, "%d", i);
-            char *args[] = {"./process", mq1_str, mq3_str, ref_string_str, i_str, NULL};
+            char *args[] = {"./process", mq1_str, mq3_str, ref_string_str, i_str, sem_str, NULL};
             execvp(args[0], args);
         }
 
         usleep(250000);        // Sleep for 250 ms
     }
 
-    msgrcv(mq1, NULL, 0, 2, MSG_NOERROR);        // Wait for all processes to finish. Message type = 2
+    // msgrcv(mq1, NULL, 0, 2, MSG_NOERROR);        // Wait for all processes to finish. Message type = 2
+    struct sembuf sem_op;
+    sem_op.sem_num = 0;
+    sem_op.sem_op = -1;
+    sem_op.sem_flg = 0;
+    semop(notify_sem, &sem_op, 1);        // Wait for all processes to finish
 
+    usleep(1000);      // Giving time to mmu to cleanup
     // Terminating scheduler and mmu
     kill(scheduler_pid, SIGKILL);
     kill(mmu_pid, SIGKILL);
@@ -137,4 +166,8 @@ int main() {
     msgctl(mq1, IPC_RMID, NULL);
     msgctl(mq2, IPC_RMID, NULL);
     msgctl(mq3, IPC_RMID, NULL);
+
+    // Remove semaphores
+    semctl(sem, 0, IPC_RMID);
+    semctl(notify_sem, 0, IPC_RMID);
 }
